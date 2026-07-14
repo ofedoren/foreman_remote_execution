@@ -1,5 +1,4 @@
 import { translate as __, sprintf } from 'foremanReact/common/I18n';
-import { foremanUrl } from 'foremanReact/common/helpers';
 import { addToast } from 'foremanReact/components/ToastsList';
 import { APIActions, get } from 'foremanReact/redux/API';
 import {
@@ -12,7 +11,6 @@ import {
   CHANGE_ENABLED_RECURRING_LOGIC,
   GET_TASK,
   JOB_INVOCATION_KEY,
-  UPDATE_JOB,
 } from './JobInvocationConstants';
 
 export const getJobInvocation = url => dispatch => {
@@ -38,17 +36,6 @@ export const getJobInvocation = url => dispatch => {
   dispatch(fetchData);
 };
 
-export const updateJob = jobId => dispatch => {
-  const url = foremanUrl(`/api/job_invocations/${jobId}`);
-  dispatch(
-    APIActions.get({
-      url,
-      key: UPDATE_JOB,
-      params: { include_hosts: false },
-    })
-  );
-};
-
 export const cancelJob = (jobId, force) => dispatch => {
   const infoToast = () =>
     force
@@ -56,8 +43,8 @@ export const cancelJob = (jobId, force) => dispatch => {
       : sprintf(__('Trying to cancel the job %s.'), jobId);
   const errorToast = response =>
     force
-      ? sprintf(__(`Could not abort the job %s: ${response}`), jobId)
-      : sprintf(__(`Could not cancel the job %s: ${response}`), jobId);
+      ? sprintf(__('Could not abort the job %s: %s'), jobId, response)
+      : sprintf(__('Could not cancel the job %s: %s'), jobId, response);
   const url = force
     ? `/job_invocations/${jobId}/cancel?force=true`
     : `/job_invocations/${jobId}/cancel`;
@@ -81,7 +68,6 @@ export const cancelJob = (jobId, force) => dispatch => {
             message: infoToast(),
           })
         );
-        dispatch(updateJob(jobId));
       },
     })
   );
@@ -129,7 +115,6 @@ export const enableRecurringLogic = (
             response?.data?.error?.message ||
             'Unknown error.'
         ),
-      handleSuccess: () => dispatch(updateJob(jobId)),
     })
   );
 };
@@ -155,7 +140,6 @@ export const cancelRecurringLogic = (recurrenceId, jobId) => dispatch => {
             response?.data?.error?.message ||
             'Unknown error.'
         ),
-      handleSuccess: () => dispatch(updateJob(jobId)),
     })
   );
 };
