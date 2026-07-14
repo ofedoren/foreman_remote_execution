@@ -39,9 +39,7 @@ import { CheckboxesActions } from './CheckboxesActions';
 import DropdownFilter from './DropdownFilter';
 import Columns, {
   JOB_INVOCATION_HOSTS,
-  LIST_TEMPLATE_INVOCATIONS,
   STATUS_UPPERCASE,
-  ALL_JOB_HOSTS,
   AWAITING_STATUS_FILTER,
 } from './JobInvocationConstants';
 import { TemplateInvocation } from './TemplateInvocation';
@@ -51,8 +49,8 @@ import { PopupAlert } from './OpenAllInvocationsModal';
 const JobInvocationHostTable = ({
   id,
   initialFilter,
+  jobFinished,
   onFilterUpdate,
-  statusLabel,
   targeting,
 }) => {
   const columns = Columns();
@@ -69,8 +67,16 @@ const JobInvocationHostTable = ({
 
   // Expansive items
   const [expandedHost, setExpandedHost] = useState(new Set());
-  const prevStatusLabel = useRef(statusLabel);
+  const prevJobFinished = useRef(jobFinished);
   const prevFilter = useRef(initialFilter);
+  const prevId = useRef(id);
+  const pollTimeoutId = useRef(null);
+  const currentPollParams = useRef({});
+  const cachedPermissions = useRef({});
+  const jobFinishedRef = useRef(jobFinished);
+  useEffect(() => {
+    jobFinishedRef.current = jobFinished;
+  }, [jobFinished]);
 
   const [hostInvocationStates, setHostInvocationStates] = useState({});
 
@@ -154,32 +160,60 @@ const JobInvocationHostTable = ({
     [initialFilter, urlSearchQuery]
   );
 
-  const handleResponse = useCallback((data, key) => {
-    if (key === JOB_INVOCATION_HOSTS) {
-      const ids = data.data.results.map(i => i.id);
+  const updateHostsState = useCallback((data, isPoll) => {
+    const { results } = data.data;
 
-      setApiResponse(data.data);
-      setAllHostsIds(ids);
-      setStatus(STATUS_UPPERCASE.RESOLVED);
+    if (!isPoll) {
+      cachedPermissions.current = Object.fromEntries(
+        results.map(result => [result.id, result.permissions])
+      );
     }
+
+    const mergedResults = results.map(result => ({
+      ...result,
+      permissions: cachedPermissions.current[result.id],
+    }));
+
+    const ids = mergedResults.map(i => i.id);
+    setApiResponse({ ...data.data, results: mergedResults });
+    setAllHostsIds(ids);
+    setStatus(STATUS_UPPERCASE.RESOLVED);
   }, []);
 
   // Call hosts data with params
   const makeApiCall = useCallback(
-    (requestParams, callParams = {}) => {
+    (requestParams, { isPoll = false } = {}) => {
       dispatch(
         APIActions.get({
-          key: callParams.key ?? ALL_JOB_HOSTS,
-          url: callParams.url ?? `/api/job_invocations/${id}/hosts`,
-          params: requestParams,
-          handleSuccess: data => handleResponse(data, callParams.key),
-          handleError: () => setStatus(STATUS_UPPERCASE.ERROR),
+          key: JOB_INVOCATION_HOSTS,
+          url: `/api/job_invocations/${id}/hosts`,
+          params: {
+            ...(!isPoll && { include_permissions: true }),
+            ...requestParams,
+          },
+          handleSuccess: data => {
+            updateHostsState(data, isPoll);
+            if (!jobFinishedRef.current) {
+              pollTimeoutId.current = setTimeout(
+                () => makeApiCall(currentPollParams.current, { isPoll: true }),
+                5000
+              );
+            } else {
+              pollTimeoutId.current = null;
+            }
+          },
+          handleError: () => {
+            pollTimeoutId.current = null;
+            setStatus(STATUS_UPPERCASE.ERROR);
+          },
           errorToast: ({ response }) =>
-            response?.data?.error?.full_messages?.[0] || response,
+            response?.data?.error?.full_messages?.[0] ||
+            response?.data?.error?.message ||
+            'Error',
         })
       );
     },
-    [dispatch, id, handleResponse]
+    [dispatch, id, updateHostsState]
   );
 
   const filterApiCall = useCallback(
@@ -202,7 +236,11 @@ const JobInvocationHostTable = ({
         finalParams.search = filterSearch;
       }
 
-      makeApiCall(finalParams, { key: JOB_INVOCATION_HOSTS });
+      currentPollParams.current = finalParams;
+      clearTimeout(pollTimeoutId.current);
+      pollTimeoutId.current = null;
+
+      makeApiCall(finalParams);
 
       const urlSearchParams = new URLSearchParams(window.location.search);
 
@@ -222,46 +260,37 @@ const JobInvocationHostTable = ({
     ]
   );
 
-  // Filter change
-  const handleFilterChange = useCallback(
-    newFilter => {
-      onFilterUpdate(newFilter);
-    },
-    [onFilterUpdate]
-  );
-
   // Effects
   // run after mount
   const initializedRef = useRef(false);
   useEffect(() => {
     if (!initializedRef.current) {
-      // Job Invo template load
-      makeApiCall(
-        {},
-        {
-          url: `/job_invocations/${id}/hosts`,
-          key: LIST_TEMPLATE_INVOCATIONS,
-        }
-      );
-
       if (initialFilter === '') {
         onFilterUpdate('all_statuses');
       }
       initializedRef.current = true;
     }
-  }, [makeApiCall, id, initialFilter, onFilterUpdate]);
+  }, [initialFilter, onFilterUpdate]);
 
   useEffect(() => {
     const filterChanged = initialFilter !== prevFilter.current;
-    const statusChanged = statusLabel !== prevStatusLabel.current;
+    const statusChanged = jobFinished !== prevJobFinished.current;
+    const idChanged = id !== prevId.current;
 
-    prevFilter.current = initialFilter;
-    prevStatusLabel.current = statusLabel;
-
-    if ((filterChanged || statusChanged) && initialFilter !== '') {
+    if ((filterChanged || statusChanged || idChanged) && initialFilter !== '') {
+      prevFilter.current = initialFilter;
+      prevJobFinished.current = jobFinished;
+      prevId.current = id;
       filterApiCall();
     }
-  }, [initialFilter, statusLabel, id, filterApiCall]);
+  }, [initialFilter, jobFinished, id, filterApiCall]);
+
+  useEffect(
+    () => () => {
+      clearTimeout(pollTimeoutId.current);
+    },
+    []
+  );
 
   const {
     updateSearchQuery: updateSearchQueryBulk,
@@ -406,7 +435,7 @@ const JobInvocationHostTable = ({
           <DropdownFilter
             key="dropdown-filter"
             dropdownFilter={initialFilter}
-            setDropdownFilter={handleFilterChange}
+            setDropdownFilter={onFilterUpdate}
           />,
           <CheckboxesActions
             bulkParams={selectedCount > 0 ? fetchBulkParams() : null}
@@ -475,7 +504,11 @@ const JobInvocationHostTable = ({
                     <Td key={k}>{columns[k].wrapper(result)}</Td>
                   ))}
                   <Td isActionCell>
-                    <RowActions hostID={result.id} jobID={id} />
+                    <RowActions
+                      hostID={result.id}
+                      jobID={id}
+                      permissions={result.permissions}
+                    />
                   </Td>
                 </Tr>
                 <Tr
@@ -544,13 +577,13 @@ JobInvocationHostTable.propTypes = {
   id: PropTypes.string.isRequired,
   targeting: PropTypes.object.isRequired,
   initialFilter: PropTypes.string.isRequired,
-  statusLabel: PropTypes.string,
+  jobFinished: PropTypes.bool,
   onFilterUpdate: PropTypes.func,
 };
 
 JobInvocationHostTable.defaultProps = {
   onFilterUpdate: () => {},
-  statusLabel: undefined,
+  jobFinished: false,
 };
 
 export default JobInvocationHostTable;

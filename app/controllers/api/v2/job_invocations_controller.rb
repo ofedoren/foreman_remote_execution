@@ -118,6 +118,7 @@ module Api
       add_scoped_search_description_for(JobInvocation)
       param :id, :identifier, :required => true
       def hosts
+        @include_permissions = Foreman::Cast.to_bool(params[:include_permissions])
         set_hosts_and_template_invocations
         @total = @hosts.size
         @hosts = @hosts.search_for(params[:search], :order => params[:order]).paginate(:page => params[:page], :per_page => params[:per_page])
@@ -329,6 +330,22 @@ module Api
         end
         @smart_proxy_id = template_invocations.to_h { |ti| [ti.host_id, ti.smart_proxy_id] }
         @smart_proxy_name = template_invocations.to_h { |ti| [ti.host_id, ti.smart_proxy_name] }
+        return unless @include_permissions
+        @task_by_host = template_invocations.to_h do |ti|
+          task = ti.run_host_job_task
+          [ti.host_id, task]
+        end
+        can_cancel_job_invocations = authorized_for(:permission => :cancel_job_invocations, :auth_object => @job_invocation)
+        can_create_job_invocations = authorized_for(controller: :job_invocations, action: :create)
+        can_execute_on_infra_hosts = User.current.can?(:execute_jobs_on_infrastructure_hosts)
+        @permissions_by_host = hosts.to_h do |host|
+          task = @task_by_host[host.id]
+          [host.id, {
+            :view_foreman_tasks => task && authorized_for(:permission => :view_foreman_tasks, :auth_object => task),
+            :cancel_job_invocations => can_cancel_job_invocations,
+            :execute_jobs => can_create_job_invocations && (!host.infrastructure_host? || can_execute_on_infra_hosts),
+          }]
+        end
       end
     end
   end

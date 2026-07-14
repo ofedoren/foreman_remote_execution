@@ -58,12 +58,6 @@ const JobInvocationToolbarButtons = ({ jobId, data }) => {
     );
   }, [jobId, reportTemplateJobId, templateInputId]);
 
-  const isCreateReportDisabled =
-    !canGenerateReportTemplates ||
-    task?.state === STATUS.RUNNING ||
-    task?.state === STATUS.PENDING ||
-    reportHref === undefined;
-
   const onActionFocus = useCallback(() => {
     const element = document.getElementById(
       `toggle-split-button-action-primary-${jobId}`
@@ -142,7 +136,7 @@ const JobInvocationToolbarButtons = ({ jobId, data }) => {
               ouiaId="change-enabled-recurring-dropdown-item"
               onClick={() =>
                 dispatch(
-                  enableRecurringLogic(recurrence?.id, recurringEnabled, jobId)
+                  enableRecurringLogic(recurrence?.id, recurringEnabled)
                 )
               }
               key="change-enabled-recurring"
@@ -160,7 +154,7 @@ const JobInvocationToolbarButtons = ({ jobId, data }) => {
             <DropdownItem
               ouiaId="cancel-recurring-dropdown-item"
               onClick={() =>
-                dispatch(cancelRecurringLogic(recurrence?.id, jobId))
+                dispatch(cancelRecurringLogic(recurrence?.id))
               }
               key="cancel-recurring"
               component="button"
@@ -174,7 +168,7 @@ const JobInvocationToolbarButtons = ({ jobId, data }) => {
             </DropdownItem>,
           ]
         : [],
-    [recurrence, recurringEnabled, canEditRecurringLogic, dispatch, jobId]
+    [recurrence, recurringEnabled, canEditRecurringLogic, dispatch]
   );
 
   const dropdownItems = useMemo(
@@ -286,7 +280,11 @@ const JobInvocationToolbarButtons = ({ jobId, data }) => {
             className="button-create-report"
             href={reportHref}
             variant="secondary"
-            isDisabled={isCreateReportDisabled}
+            isDisabled={
+              !canGenerateReportTemplates ||
+              task?.state === STATUS.PENDING ||
+              reportHref === undefined
+            }
           >
             {__(`Create report`)}
           </Button>

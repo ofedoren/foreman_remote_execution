@@ -1,15 +1,15 @@
 /* eslint-disable max-lines */
 import React from 'react';
-import { fireEvent, screen, act } from '@testing-library/react';
-import '@testing-library/jest-dom';
+import configureMockStore from 'redux-mock-store';
+import { fireEvent, render, screen, act } from '@testing-library/react';
+import '@testing-library/jest-dom/extend-expect';
 import { createMemoryHistory } from 'history';
 import { Router } from 'react-router-dom';
-import { rtlHelpers } from 'foremanReact/common/testHelpers';
+import { Provider } from 'react-redux';
+import thunk from 'redux-thunk';
 import { STATUS } from 'foremanReact/constants';
 import { foremanUrl } from 'foremanReact/common/helpers';
-import { usePermissions } from 'foremanReact/common/hooks/Permissions/permissionHooks';
 import * as api from 'foremanReact/redux/API';
-import { APIActions } from 'foremanReact/redux/API';
 import JobInvocationDetailPage from '../index';
 import {
   jobInvocationData,
@@ -23,7 +23,6 @@ import {
   enableRecurringLogic,
   cancelRecurringLogic,
 } from '../JobInvocationActions';
-import { createForemanContextWrapper } from './foremanTestHelpers';
 import {
   CANCEL_JOB,
   CANCEL_RECURRING_LOGIC,
@@ -33,29 +32,9 @@ import {
   GET_TASK,
   JOB_INVOCATION_KEY,
 } from '../JobInvocationConstants';
-
-const { renderWithStore } = rtlHelpers;
-
-jest.mock('foremanReact/redux/API/APISelectors', () =>
-  jest.requireActual('foremanReact/redux/API/APISelectors')
-);
-
-jest.mock('foremanReact/common/hooks/Permissions/permissionHooks');
-jest.mock('../JobInvocationActions', () => {
-  const actual = jest.requireActual('../JobInvocationActions');
-
-  return {
-    ...actual,
-    getJobInvocation: jest.fn(() => () => undefined),
-    getTask: jest.fn(() => () => undefined),
-  };
-});
+import { createForemanContextWrapper } from './foremanTestHelpers';
 
 jest.spyOn(api, 'get');
-jest.spyOn(APIActions, 'post');
-jest.spyOn(APIActions, 'put');
-
-usePermissions.mockReturnValue(true);
 
 // Mock toLocaleString to always use UTC timezone for consistent test results
 const originalToLocaleString = Date.prototype.toLocaleString;
@@ -83,59 +62,46 @@ jest.mock('foremanReact/routes/common/PageLayout/PageLayout', () =>
   ))
 );
 
-const setupApiMocks = () => {
-  api.get.mockImplementation(({ handleSuccess, key, ...action }) => {
-    if (key === GET_REPORT_TEMPLATES) {
-      if (handleSuccess) {
-        handleSuccess({
-          data: mockReportTemplatesResponse,
-        });
-      }
-    } else if (key === GET_REPORT_TEMPLATE_INPUTS) {
-      if (handleSuccess) {
-        handleSuccess({
-          data: mockReportTemplateInputsResponse,
-        });
-      }
-    }
-
-    return { type: 'get', key, ...action };
-  });
-  APIActions.post.mockImplementation(payload => ({ type: 'post', ...payload }));
-  APIActions.put.mockImplementation(payload => ({ type: 'put', ...payload }));
+const initialState = {
+  JOB_INVOCATION_KEY: {
+    response: jobInvocationData,
+    status: STATUS.RESOLVED,
+  },
+  GET_REPORT_TEMPLATES: mockReportTemplatesResponse,
+  extendable: {},
 };
 
-const createJobInvocationDetailState = ({
-  jobInvocation = jobInvocationData,
-  jobInvocationStatus = STATUS.RESOLVED,
-  jobInvocationError = null,
-  includeTaskState = true,
-} = {}) => {
-  const jobInvocationResponse =
-    jobInvocationError || JSON.parse(JSON.stringify(jobInvocation));
+const initialStateScheduled = {
+  JOB_INVOCATION_KEY: {
+    response: jobInvocationDataScheduled,
+    status: STATUS.RESOLVED,
+  },
+  extendable: {},
+};
 
-  return {
-    API: {
-      [JOB_INVOCATION_KEY]: jobInvocationError
-        ? {
-            response: jobInvocationResponse,
-            status: STATUS.ERROR,
-          }
-        : {
-            response: jobInvocationResponse,
-            status: jobInvocationStatus,
-          },
-      ...(includeTaskState && {
-        [GET_TASK]: {
-          response: {
-            available_actions: { cancellable: true },
-            ...(jobInvocationResponse.task || {}),
-          },
-          status: STATUS.RESOLVED,
-        },
-      }),
-    },
-  };
+api.get.mockImplementation(({ handleSuccess, ...action }) => {
+  if (action.key === 'GET_REPORT_TEMPLATES') {
+    handleSuccess &&
+      handleSuccess({
+        data: mockReportTemplatesResponse,
+      });
+  } else if (action.key === 'GET_REPORT_TEMPLATE_INPUTS') {
+    handleSuccess &&
+      handleSuccess({
+        data: mockReportTemplateInputsResponse,
+      });
+  }
+
+  return { type: 'get', ...action };
+});
+
+const initialStateRecurring = {
+  JOB_INVOCATION_KEY: {
+    response: jobInvocationDataRecurring,
+    status: STATUS.RESOLVED,
+  },
+  GET_REPORT_TEMPLATES: mockReportTemplatesResponse,
+  extendable: {},
 };
 
 jest.mock('../JobInvocationHostTable.js', () => () => (
@@ -144,66 +110,21 @@ jest.mock('../JobInvocationHostTable.js', () => () => (
 
 const reportTemplateJobId = mockReportTemplatesResponse.results[0].id;
 
-const defaultHistory = { push: jest.fn() };
-
-const renderJobInvocationDetailPage = (
-  initialState,
-  { jobId, history = defaultHistory } = {}
-) => {
-  const id =
-    jobId ?? initialState.API?.[JOB_INVOCATION_KEY]?.response?.id ?? '1';
-
-  return renderWithStore(
-    <JobInvocationDetailPage
-      match={{ params: { id: `${id}` } }}
-      history={history}
-    />,
-    initialState,
-    undefined
-  );
-};
+const mockStore = configureMockStore([thunk]);
+const props = { history: { push: jest.fn() } };
 
 describe('JobInvocationDetailPage', () => {
-  beforeEach(() => {
-    setupApiMocks();
-    usePermissions.mockReturnValue(true);
-
-    const { getJobInvocation, getTask } = jest.requireMock(
-      '../JobInvocationActions'
-    );
-    getJobInvocation.mockImplementation(() => () => undefined);
-    getTask.mockImplementation(() => () => undefined);
-  });
-
-  afterEach(() => {
-    api.get.mockClear();
-    APIActions.post.mockClear();
-    APIActions.put.mockClear();
-  });
-
-  it('shows scheduled date', async () => {
-    const scheduledJobInvocation = JSON.parse(
-      JSON.stringify(jobInvocationDataScheduled)
-    );
-
-    renderJobInvocationDetailPage(
-      createJobInvocationDetailState({
-        jobInvocation: scheduledJobInvocation,
-        includeTaskState: false,
-      }),
-      { jobId: jobInvocationDataScheduled.id }
-    );
-
-    expect(screen.getByText('Scheduled at:')).toBeInTheDocument();
-    expect(screen.getByText('Jan 1, 3000, 11:34 UTC')).toBeInTheDocument();
-    expect(screen.getByText('Not yet')).toBeInTheDocument();
-  });
-
   it('renders main information', async () => {
     const jobId = jobInvocationData.id;
+    const store = mockStore(initialState);
 
-    const { container } = renderJobInvocationDetailPage(
-      createJobInvocationDetailState()
+    const { container } = render(
+      <Provider store={store}>
+        <JobInvocationDetailPage
+          match={{ params: { id: `${jobId}` } }}
+          {...props}
+        />
+      </Provider>
     );
 
     expect(screen.getByText('Description')).toBeInTheDocument();
@@ -291,79 +212,94 @@ describe('JobInvocationDetailPage', () => {
   });
 
   it('keeps toolbar buttons mounted while job invocation data is refreshing', async () => {
-    renderJobInvocationDetailPage(
-      createJobInvocationDetailState({
-        jobInvocationStatus: STATUS.PENDING,
-      })
+    const jobId = jobInvocationData.id;
+    const store = mockStore({
+      ...initialState,
+      JOB_INVOCATION_KEY: {
+        response: jobInvocationData,
+        status: STATUS.PENDING,
+      },
+    });
+
+    render(
+      <Provider store={store}>
+        <JobInvocationDetailPage
+          match={{ params: { id: `${jobId}` } }}
+          {...props}
+        />
+      </Provider>
     );
 
     expect(screen.getByText('Create report')).toBeInTheDocument();
     expect(screen.getByText('Rerun all')).toBeInTheDocument();
   });
 
-  it('disables Create report when the job task state is running', async () => {
-    usePermissions.mockImplementation(requiredPermissions =>
-      requiredPermissions.includes('generate_report_templates')
+  it('shows scheduled date', async () => {
+    const store = mockStore(initialStateScheduled);
+    render(
+      <Provider store={store}>
+        <JobInvocationDetailPage
+          match={{ params: { id: `${jobInvocationDataScheduled.id}` } }}
+          {...props}
+        />
+      </Provider>
     );
 
-    renderJobInvocationDetailPage(
-      createJobInvocationDetailState({
-        jobInvocation: {
-          ...jobInvocationData,
-          task: { ...jobInvocationData.task, state: 'running' },
-        },
-      })
-    );
-
-    const createReportButton = screen.getByRole('link', {
-      name: 'Create report',
-    });
-
-    expect(createReportButton).toHaveAttribute('aria-disabled', 'true');
-    expect(createReportButton).toHaveClass('pf-m-disabled');
+    expect(screen.getByText('Scheduled at:')).toBeInTheDocument();
+    expect(screen.getByText('Jan 1, 3000, 11:34 UTC')).toBeInTheDocument();
+    expect(screen.getByText('Not yet')).toBeInTheDocument();
   });
 
   it('should dispatch global actions', async () => {
-    const actualActions = jest.requireActual('../JobInvocationActions');
-    const { getTask } = jest.requireMock('../JobInvocationActions');
-
-    getTask.mockImplementation(taskId => dispatch =>
-      actualActions.getTask(taskId)(dispatch)
-    );
-
+    // recurring in the future
     const jobId = jobInvocationDataRecurring.id;
     const taskId = jobInvocationDataRecurring.task.id;
     const recurrenceId = jobInvocationDataRecurring.recurrence.id;
-
-    const { store } = renderJobInvocationDetailPage(
-      createJobInvocationDetailState({
-        jobInvocation: jobInvocationDataRecurring,
-      }),
-      { jobId }
+    const store = mockStore(initialStateRecurring);
+    render(
+      <Provider store={store}>
+        <JobInvocationDetailPage
+          match={{ params: { id: `${jobId}` } }}
+          {...props}
+        />
+      </Provider>
     );
 
-    expect(api.get).toHaveBeenCalledWith(
-      expect.objectContaining({
-        key: GET_REPORT_TEMPLATES,
-        url: '/api/report_templates',
-      })
-    );
-    expect(api.get).toHaveBeenCalledWith(
-      expect.objectContaining({
+    const expectedActions = [
+      { key: GET_REPORT_TEMPLATES, url: '/api/report_templates' },
+      {
+        key: JOB_INVOCATION_KEY,
+        url: `/api/job_invocations/${jobId}`,
+      },
+      {
         key: GET_TASK,
         url: `/foreman_tasks/api/tasks/${taskId}`,
-      })
-    );
-    expect(api.get).toHaveBeenCalledWith(
-      expect.objectContaining({
+      },
+      {
         key: GET_REPORT_TEMPLATE_INPUTS,
         url: `/api/templates/${reportTemplateJobId}/template_inputs`,
-      })
-    );
-
-    api.get.mockClear();
-    APIActions.post.mockClear();
-    APIActions.put.mockClear();
+      },
+      {
+        key: CANCEL_JOB,
+        url: `/job_invocations/${jobId}/cancel`,
+      },
+      {
+        key: CANCEL_JOB,
+        url: `/job_invocations/${jobId}/cancel?force=true`,
+      },
+      {
+        key: CHANGE_ENABLED_RECURRING_LOGIC,
+        url: `/foreman_tasks/api/recurring_logics/${recurrenceId}`,
+      },
+      {
+        key: CHANGE_ENABLED_RECURRING_LOGIC,
+        url: `/foreman_tasks/api/recurring_logics/${recurrenceId}`,
+      },
+      {
+        key: CANCEL_RECURRING_LOGIC,
+        url: `/foreman_tasks/recurring_logics/${recurrenceId}/cancel`,
+      },
+    ];
 
     store.dispatch(cancelJob(jobId, false));
     store.dispatch(cancelJob(jobId, true));
@@ -371,41 +307,20 @@ describe('JobInvocationDetailPage', () => {
     store.dispatch(enableRecurringLogic(recurrenceId, false, jobId));
     store.dispatch(cancelRecurringLogic(recurrenceId, jobId));
 
-    expect(APIActions.post).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        key: CANCEL_JOB,
-        url: `/job_invocations/${jobId}/cancel`,
-      })
-    );
-    expect(APIActions.post).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        key: CANCEL_JOB,
-        url: `/job_invocations/${jobId}/cancel?force=true`,
-      })
-    );
-    expect(APIActions.put).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        key: CHANGE_ENABLED_RECURRING_LOGIC,
-        url: `/foreman_tasks/api/recurring_logics/${recurrenceId}`,
-      })
-    );
-    expect(APIActions.put).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        key: CHANGE_ENABLED_RECURRING_LOGIC,
-        url: `/foreman_tasks/api/recurring_logics/${recurrenceId}`,
-      })
-    );
-    expect(APIActions.post).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        key: CANCEL_RECURRING_LOGIC,
-        url: `/foreman_tasks/recurring_logics/${recurrenceId}/cancel`,
-      })
-    );
+    const actualActions = store.getActions();
+    expect(actualActions).toHaveLength(expectedActions.length);
+
+    expectedActions.forEach((expectedAction, index) => {
+      if (actualActions[index].type === 'WITH_INTERVAL') {
+        expect(actualActions[index].key.key).toEqual(expectedAction.key);
+        expect(actualActions[index].key.url).toEqual(expectedAction.url);
+      } else {
+        expect(actualActions[index].key).toEqual(expectedAction.key);
+        if (expectedAction.url) {
+          expect(actualActions[index].url).toEqual(expectedAction.url);
+        }
+      }
+    });
   });
 
   it('renders empty state when the job invocation fails to load', () => {
@@ -413,23 +328,28 @@ describe('JobInvocationDetailPage', () => {
     const errorMessage = 'Record not found';
     const history = createMemoryHistory();
     const ForemanContextWrapper = createForemanContextWrapper();
-
-    renderWithStore(
-      <Router history={history}>
-        <ForemanContextWrapper>
-          <JobInvocationDetailPage
-            match={{ params: { id: jobId } }}
-            history={history}
-          />
-        </ForemanContextWrapper>
-      </Router>,
-      createJobInvocationDetailState({
-        jobInvocationError: {
+    const store = mockStore({
+      JOB_INVOCATION_KEY: {
+        status: STATUS.ERROR,
+        response: {
           message: errorMessage,
           response: { status: 404 },
         },
-      }),
-      undefined
+      },
+      extendable: {},
+    });
+
+    render(
+      <Router history={history}>
+        <ForemanContextWrapper>
+          <Provider store={store}>
+            <JobInvocationDetailPage
+              match={{ params: { id: jobId } }}
+              history={history}
+            />
+          </Provider>
+        </ForemanContextWrapper>
+      </Router>
     );
 
     expect(
